@@ -1,0 +1,25 @@
+CHECK_INTERVAL = 1000
+CHECK_TYPE = VALUE
+CHECK_COND = GE
+CHECK_THRESHOLD = 0.9999
+PRIORITY_TYPE = LOCAL
+SCHEDULE_PORTION = 0.01
+ENGINE_TYPE = ASYNC
+THREAD_NUM = 4
+MESSAGE_TABLE_UPDATE_THRESHOLD = 200000000
+MESSAGE_TABLE_WAITING_INTERVAL = 800
+RULE:
+Node(int n:0..916427).
+Rank(int n:0..916427, double rank).
+Edge(int n:0..916427, (int t)).
+EdgeCnt(int n:0..916427, int cnt).
+
+Edge(s, t) :- l=$read("hdfs://master:9000/experiment/range_w"), (s1,s2)=$split(l, "	"),
+             s=$toInt(s1), t=$toInt(s2).
+
+
+Node(n) :- l=$read("hdfs://master:9000/experiment/90w_node.txt"), n=$toInt(l).
+
+EdgeCnt(s, $inc(1)) :- Edge(s, t).
+Rank(n, r) :- Node(n), r = 0.2 / 916427.
+Rank(y, $dsum(r1)) :- Rank(x, r), Edge(x, y),  EdgeCnt(x, d), r1 = 0.8 * r / d.

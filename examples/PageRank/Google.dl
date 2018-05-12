@@ -1,0 +1,32 @@
+CHECK_INTERVAL = 1000
+CHECK_TYPE = VALUE
+CHECK_COND = GE
+CHECK_THRESHOLD =  875700
+#0.999*875713
+PRIORITY_TYPE = NONE
+#SCHEDULE_PORTION = 1
+# ASYNC/SYNC/SEMI-ASYNC
+DYNAMIC = TRUE
+ENGINE_TYPE = AUTO
+MESSAGE_TABLE_UPDATE_THRESHOLD = 10000
+MESSAGE_TABLE_WAITING_INTERVAL = 100
+INIT_SIZE = 875712
+MVCC = FALSE
+SAVE_PATH="/home/wangqg/wangqgresult1"
+THREAD_NUM =1
+#PRINT_RESULT = TRUE
+RULE:
+Node(int n:0..875712).
+Rank(int n:0..875712, double rank).
+Edge(int n:0..875712, (int t)).
+EdgeCnt(int n:0..875712, int cnt).
+
+Edge(s, t) :- l=$read("/home/wangqg/Google/edge.txt"), (s1,s2)=$split(l, "	"),
+             s=$toInt(s1), t=$toInt(s2).
+
+
+Node(n) :- l=$read("/home/wangqg/Google/node.txt"), n=$toInt(l).
+
+EdgeCnt(s, $inc(1)) :- Edge(s, t).
+Rank(n, r) :- Node(n), r = 0.2.
+Rank(y, $dsum(r1)) :- Rank(x, r), Edge(x, y), EdgeCnt(x, __d), r1 = 0.8 * r / __d.

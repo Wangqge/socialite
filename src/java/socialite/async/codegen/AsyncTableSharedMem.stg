@@ -1,0 +1,461 @@
+import "Utils.stg"
+AsyncTableSharedMem(sync, name, keyAsIndex, keyType, valueType, dynamic, deltaType, aggrType, weightType, extraType, expr) ::= <<
+package socialite.async.codegen;
+<importForTable()>
+//algorithm <name>
+public class AsyncTable extends BaseAsyncTable{
+    private static final Log L = LogFactory.getLog(AsyncTable.class);
+    private volatile int size;
+    <if(keyAsIndex)>
+    private List\<<PrimitiveList.(keyType)>\> adjList; //if weight graph, src,[dst1, weight1 ,dst2, weight2]
+    <else> <! NOTE: for single key program, the dst node is also adj, but for pair program, the dst node is type of pair !>
+        <if(IsPairKey.(keyType))>
+            private List\<List\<Pair>\> pairList;//localInd as index
+            private Map\<Pair, Integer> keyIndMap;
+        <else>
+            private <KeyIndMap.(keyType)> keyIndMap;
+        <endif>
+        private <IndKeyMap.(keyType)> indKeyMap;
+        private <PrimitiveObjectMap.(keyType)>\<<PrimitiveList.(keyType)>\> adjList; //if weight graph, src,[dst1, weight1 ,dst2, weight2]
+    <endif>
+    
+
+    private <PrimitiveList.(valueType)> valueList;
+    private List\<<TypeAtomic.(deltaType)>\> deltaList;
+    <if(sync)>private List\<<TypeAtomic.(deltaType)>\> bufferDeltaList;<endif>
+
+    <if(extraType)>private T<ShortTypeNameMap.(keyType)><ShortTypeNameMap.(extraType)>HashMap keyExtraMap;<endif>
+
+    <if(IsBoolean.(valueType))> <!暂时忽略2-step程序的weight和extra!>
+        private List\<Boolean> sentFlagList;
+    <endif>
+
+    <if(IsInt.(deltaType))>
+    public static final <deltaType> IDENTITY_ELEMENT = <IntegerIdentityElement.(aggrType)>;
+    <elseif(IsLong.(deltaType))>
+    public static final <deltaType> IDENTITY_ELEMENT = <LongIdentityElement.(aggrType)>;
+    <elseif(IsFloat.(deltaType))>
+    public static final <deltaType> IDENTITY_ELEMENT = <FloatIdentityElement.(aggrType)>;
+    <elseif(IsDouble.(deltaType))>
+    public static final <deltaType> IDENTITY_ELEMENT = <DoubleIdentityElement.(aggrType)>;
+    <endif>
+
+    private boolean edgeInited;
+
+    public AsyncTable(int initSize) {
+        <if(keyAsIndex)>
+        adjList = new ArrayList\<>(size);
+        <else>
+        <if(IsPairKey.(keyType))>
+        keyIndMap = new ConcurrentHashMap\<>(initSize);
+        <else>
+        keyIndMap = new <KeyIndMap.(keyType)>(initSize);
+        <endif>
+        indKeyMap = new <IndKeyMap.(keyType)>(initSize);
+        adjList = new <PrimitiveObjectMap.(keyType)>\<>(initSize);
+        <endif>
+        
+        <if(IsPairKey.(keyType))>pairList = new ArrayList\<>();<endif>
+        
+        valueList = new <PrimitiveList.(valueType)>(initSize);
+        deltaList = new ArrayList\<>(initSize);
+
+        <if(sync)>bufferDeltaList = new ArrayList\<>(initSize);<endif>
+        <if(IsBoolean.(valueType))>sentFlagList = new ArrayList\<>(initSize);<endif>
+        <if(extraType)>keyExtraMap = new T<ShortTypeNameMap.(keyType)><ShortTypeNameMap.(extraType)>HashMap(initSize);<endif>
+    }
+
+    @Override
+    public boolean updateLockFree(int localInd<if(sync)>, int iter<endif>) {
+        <deltaType> oldDelta;
+        <keyType> key;
+        <if(keyAsIndex)>
+            key = localInd;
+        <else>
+            key = indKeyMap.get(localInd);
+        <endif>
+
+        <if(IsBoolean.(valueType))>
+            <if(sync)>
+                if (iter % 2 == 0) {
+                    oldDelta = deltaList.get(localInd).getAndSet(0);
+                    oldDelta = bufferDeltaList.get(localInd).addAndGet(oldDelta);
+                } else {
+                    oldDelta = bufferDeltaList.get(localInd).getAndSet(0);
+                    oldDelta = deltaList.get(localInd).addAndGet(oldDelta);
+                }
+            <else>
+                oldDelta = deltaList.get(localInd).get();
+            <endif>
+
+            if (eval(oldDelta)){
+                valueList.set(localInd, true);
+            }
+
+            if(valueList.get(localInd) && !sentFlagList.get(localInd)){
+                <PrimitiveList.(keyType)> dstList = adjList.get(key);
+                <! This node has no out-link, DO NOTHING !>
+                if(dstList == null)
+                    return true;
+                    
+                for(int i = 0; i\< dstList.size(); i++) {
+                    <keyType> dst = dstList.get(i);
+                    int dstLocalInd;
+                    <if(keyAsIndex)>
+                        dstLocalInd = dst;
+                        if(dstLocalInd >= size)
+                            throw new RuntimeException(String.format("Node %d has no out-link", dstLocalInd));
+                    <else>
+                        <if(dynamic)>
+                            dstLocalInd = keyIndMap.putIfAbsent(dst, addEntry(dst, false, IDENTITY_ELEMENT));
+                        <else>
+                            dstLocalInd = keyIndMap.get(dst);
+                        <endif>
+                    <endif>
+
+                    <! OTHER AGGREGATE FUNCTIONS IS NOT SUPPORTED !>
+                    <if(sync)>
+                        if (iter % 2 == 0) {
+                            <if(IsCount.(aggrType))>bufferDeltaList.get(dstLocalInd).addAndGet(1);<endif>
+                        } else {
+                            <if(IsCount.(aggrType))>deltaList.get(dstLocalInd).addAndGet(1);<endif>
+                        }
+                    <else>
+                        <if(IsCount.(aggrType))>deltaList.get(dstLocalInd).addAndGet(1);<endif>
+                    <endif>
+                }
+                sentFlagList.set(localInd, true);
+            }
+        <else>
+            <if(sync)>
+            if (iter % 2 == 0) {
+                oldDelta = deltaList.get(localInd).getAndSet(IDENTITY_ELEMENT);
+            } else {
+                oldDelta = bufferDeltaList.get(localInd).getAndSet(IDENTITY_ELEMENT);
+            }
+            <else>
+                oldDelta = deltaList.get(localInd).getAndSet(IDENTITY_ELEMENT);
+            <endif>
+
+            if(oldDelta == IDENTITY_ELEMENT)
+                return false;
+            <! delta + value -> value !>
+            <valueType> accumulatedValue = <WrappedType.(valueType)>.<AggrTypeFunc.(aggrType)>(valueList.get(localInd), oldDelta);
+            <! 聚集后比原来还小，则不更新 !>
+            <if(IsMax.(aggrType))>if(accumulatedValue \<= valueList.get(localInd))return false;
+            <elseif(IsMin.(aggrType))>if(accumulatedValue >= valueList.get(localInd))return false;<endif>
+            //更新value
+            valueList.set(localInd, accumulatedValue);
+
+            <if(extraType)><extraType> extra = keyExtraMap.get(key);<endif>
+
+            <if(keyAsIndex)>
+                <PrimitiveList.(keyType)> dstList = adjList.get(localInd);
+            <else>
+                <if(IsPairKey.(keyType))>
+                    List\<Pair> dstList = pairList.get(localInd);
+                    if(dstList == null) return true; //for this key, there is no dst node which is normal
+                <else>
+                    <PrimitiveList.(keyType)> dstList = adjList.get(key);
+                    if(dstList == null)
+                        throw new RuntimeException(String.format("Node " + key + " has no out-link"));
+                <endif>
+            <endif>
+
+            <if(weightType)>
+            for(int i = 0; i \< dstList.size() - 1; i += 2){
+                <weightType> weight = dstList.get(i + 1);
+            <else>
+            for(int i = 0; i \< dstList.size(); i++) {
+            <endif>
+                <keyType> dst = dstList.get(i);
+                int dstLocalInd;
+                <if(keyAsIndex)>
+                    dstLocalInd = dst;
+                    if(dstLocalInd >= size)
+                        throw new RuntimeException(String.format("Node %d has no out-link", dstLocalInd));
+                <else>
+                    <if(dynamic)>
+                        <if(IsPairKey.(keyType))>
+                        dstLocalInd = keyIndMap.putIfAbsent(dst, addEntry(dst.getV0(), dst.getV1(), IDENTITY_ELEMENT, IDENTITY_ELEMENT));
+                        <else>
+                        dstLocalInd = keyIndMap.putIfAbsent(dst, addEntry(dst, IDENTITY_ELEMENT, IDENTITY_ELEMENT));
+                        <endif>
+                    <else>
+                        dstLocalInd = keyIndMap.get(dst);
+                    <endif>
+                <endif>
+
+                <if(IsCount.(aggrType))>
+                <valueType> newDelta = oldDelta;
+                <else>
+                <valueType> newDelta = eval(oldDelta <if(weightType)>, weight<endif> <if(extraType)>, extra<endif>);
+                <endif>
+                <if(sync)>
+                    if (iter % 2 == 0) {
+                        <if(IsSum.(aggrType))>bufferDeltaList.get(dstLocalInd).addAndGet(newDelta);<endif>
+                        <if(IsMax.(aggrType))>bufferDeltaList.get(dstLocalInd).accumulateAndGet(newDelta, Math::max);<endif>
+                        <if(IsMin.(aggrType))>bufferDeltaList.get(dstLocalInd).accumulateAndGet(newDelta, Math::min);<endif>
+                        <if(IsCount.(aggrType))>bufferDeltaList.get(dstLocalInd).addAndGet(1);<endif>
+                    } else {
+                        <if(IsSum.(aggrType))>deltaList.get(dstLocalInd).addAndGet(newDelta);<endif>
+                        <if(IsMax.(aggrType))>deltaList.get(dstLocalInd).accumulateAndGet(newDelta, Math::max);<endif>
+                        <if(IsMin.(aggrType))>deltaList.get(dstLocalInd).accumulateAndGet(newDelta, Math::min);<endif>
+                        <if(IsCount.(aggrType))>deltaList.get(dstLocalInd).addAndGet(1);<endif>
+                    }
+                <else>
+                    <if(IsSum.(aggrType))>deltaList.get(dstLocalInd).addAndGet(newDelta);<endif>
+                    <if(IsMax.(aggrType))>deltaList.get(dstLocalInd).accumulateAndGet(newDelta, Math::max);<endif>
+                    <if(IsMin.(aggrType))>deltaList.get(dstLocalInd).accumulateAndGet(newDelta, Math::min);<endif>
+                    <if(IsCount.(aggrType))>deltaList.get(dstLocalInd).addAndGet(oldDelta);<endif>
+                <endif>
+            }
+        <endif>
+        return true;
+    }
+
+    <if(IsBoolean.(valueType))>
+    private boolean eval(<deltaType> oldDelta) {
+        return (<expr>);
+    }
+    <else>
+    private <deltaType> eval(<deltaType> oldDelta <if(weightType)>,<weightType> weight<endif> <if(extraType)>, <extraType> extra<endif>) {
+        return (<deltaType>)(<expr>);
+    }
+    <endif>
+
+    <if(IsPairKey.(keyType))>
+    private ArrayList\<Pair> join(Pair key) {
+        ArrayList\<Pair> dstList = new ArrayList\<>();
+
+        int col1 = key.getV0();
+        int col2 = key.getV1();
+        TIntArrayList adjacencies = adjList.get(col2);
+
+        if(adjacencies == null)
+            return null;
+
+        for(int i=0;i\<adjacencies.size();i++) {
+            int dst = adjacencies.get(i);
+
+            Pair pair = new Pair(col1, dst);
+            dstList.add(pair);
+        }
+        return dstList;
+    }
+    <endif>
+
+    /**
+    add an entry to the Table, If the key is present in the table, then the local index will be returned
+    */
+    private synchronized int addEntry(<if(IsPairKey.(keyType))>int col1OfKey, int col2OfKey<else><keyType> key<endif>, <valueType> value, <deltaType> delta){
+        <if(!keyAsIndex)>
+            <if(IsPairKey.(keyType))>
+                <keyType> key = new Pair(col1OfKey, col2OfKey);
+                Integer ind = keyIndMap.get(key);
+                if (ind != null) return ind;
+                List\<Pair> adjList = join(key);
+                pairList.add(adjList);
+            <else>
+                if (keyIndMap.containsKey(key))
+                    return keyIndMap.get(key);
+            <endif>
+
+            keyIndMap.put(key, size);
+            indKeyMap.add(key);
+        <endif>
+        
+        valueList.add(value);
+        deltaList.add(new <TypeAtomic.(deltaType)>(delta));
+        <if(sync)>bufferDeltaList.add(new <TypeAtomic.(deltaType)>(IDENTITY_ELEMENT));<endif>
+        <if(IsBoolean.(valueType))>sentFlagList.add(false);<endif>
+        return size++;
+    }
+
+    @Override
+    public VisitorImpl getInitVisitor(){
+        if(!edgeInited)
+            throw new RuntimeException("CAN NOT CALL getInitVisitor before call getEdgeVisitor");
+        return new VisitorImpl(){
+
+            <if(IsPairKey.(keyType))>
+            int col1OfKey;
+            @Override
+            public boolean visit_0(int col1OfKey) {
+                this.col1OfKey = col1OfKey;
+                return true;
+            }
+
+            @Override
+            public boolean visit(int col2OfKey, <valueType> initDelta) {
+                addEntry(col1OfKey, col2OfKey, IDENTITY_ELEMENT, initDelta);
+                return true;
+            }
+            <else>
+                <if(IsBoolean.(valueType))>
+                @Override
+                public boolean visit(<keyType> key) {
+                    //init params for count aggregate function, boolean value
+                    addEntry(key, true, 1);
+                    return true;
+                }
+                <else>
+                @Override
+                public boolean visit(<keyType> key, <deltaType> initDelta) {
+                    addEntry(key, IDENTITY_ELEMENT, initDelta);
+                    return true;
+                }
+                <endif>
+            <endif>
+        };
+    }
+
+    @Override
+    public VisitorImpl getEdgeVisitor(){
+        edgeInited = true;
+        return new VisitorImpl() {
+            <PrimitiveList.(keyType)> adjacencies;
+            @Override
+            public boolean visit_0(<if(IsPairKey.(keyType))>int<else><keyType><endif> key) {
+                <if(keyAsIndex)>
+                adjacencies = new <PrimitiveList.(keyType)>();
+                adjList.add(adjacencies);
+                <else>
+                adjacencies = adjList.get(key);
+                if(adjacencies == null) {
+                    adjacencies = new <PrimitiveList.(keyType)>();
+                    adjList.put(key, adjacencies);
+                }
+                <endif>
+                return true;
+            }
+
+            @Override
+            public boolean visit(<if(IsPairKey.(keyType))>int<else><keyType><endif> dst <if(weightType)>,<weightType> weight<endif>) {
+                adjacencies.add(dst);
+                <if(weightType)>adjacencies.add(weight);<endif>
+                return true;
+            }
+        };
+    }
+
+    <if(extraType)>
+    @Override
+    public VisitorImpl getExtraVisitor(){
+        return new VisitorImpl(){
+            @Override
+            public boolean visit(<keyType> key, <extraType> extra){
+                keyExtraMap.put(key, extra);
+                return true;
+            }
+        };
+    }
+    <endif>
+
+    @Override
+    <if(IsBoolean.(valueType))>
+    public double accumulateValue(){
+        double sum = 0;
+        for(int i=0;i\<size;i++)
+            if(valueList.get(i)){
+                sum++;
+            }
+        return sum;
+    }
+    <else>
+    public double accumulateValue(){
+        double sum = 0;
+
+        for(int i=0;i\<size;i++){
+            <valueType> value = valueList.get(i);
+            if(value != IDENTITY_ELEMENT){
+                sum+=value;
+            }
+        }
+        return sum;
+    }
+    <endif>
+
+    @Override
+    public double getPriority(int localInd){
+        <if(IsSum.(aggrType))>
+        return deltaList.get(localInd).get();
+        <elseif(IsMax.(aggrType))>
+        double val = valueList.get(localInd);
+        double delta = deltaList.get(localInd).get();
+        return val - Math.max(val, delta);
+        <elseif(IsMin.(aggrType))>
+        double val = valueList.get(localInd);
+        double delta = deltaList.get(localInd).get();
+        return val - Math.min(val, delta);
+        <elseif(IsCount.(aggrType))>
+        return deltaList.get(localInd).get();
+        <endif>
+    }
+
+    @Override
+    public double accumulateDelta(){
+        double sum = 0;
+
+        for(int i=0;i\<size;i++){
+            <deltaType> delta = deltaList.get(i).get();
+            if(delta != IDENTITY_ELEMENT){
+                sum+=delta;
+            }
+            <if(sync)>
+            delta = bufferDeltaList.get(i).get();
+            if(delta != IDENTITY_ELEMENT){
+                sum+=delta;
+            }
+            <endif>
+
+        }
+        return sum;
+    }
+
+	@Override
+	public void iterate(QueryVisitor queryVisitor){
+	    Tuple tuple;
+	    for (int i=0; i\<size; i++) {
+            <if(dynamic || !keyAsIndex)>
+                <if(IsPairKey.(keyType))>
+                    Pair pair = indKeyMap.get(i);
+                    tuple = new Tuple_Object_<valueType>_<deltaType>();
+                    tuple.set<WrappedTypeForTupleMap.(keyType)>(0, pair.toString());
+                    tuple.set<WrappedTypeForTupleMap.(valueType)>(1, valueList.get(i));
+                    tuple.set<WrappedTypeForTupleMap.(deltaType)>(2, deltaList.get(i).get());
+                    if(!queryVisitor.visit(tuple))
+                        break;
+                <elseif(IsBoolean.(valueType))>
+                    if(valueList.get(i)){
+                        tuple = new Tuple_<keyType>();
+                        tuple.set<WrappedTypeForTupleMap.(keyType)>(0, indKeyMap.get(i));
+                        if(!queryVisitor.visit(tuple))
+                            break;
+                    }
+                <else>
+                    tuple = new Tuple_<keyType>_<valueType>_<valueType>();
+                    tuple.set<WrappedTypeForTupleMap.(keyType)>(0, indKeyMap.get(i));
+                    tuple.set<WrappedTypeForTupleMap.(valueType)>(1, valueList.get(i));
+                    tuple.set<WrappedTypeForTupleMap.(deltaType)>(2, deltaList.get(i).get());
+                    if(!queryVisitor.visit(tuple))
+                        break;
+                <endif>
+            <else>
+                tuple = new Tuple_<keyType>_<valueType>_<valueType>();
+                tuple.set<WrappedTypeForTupleMap.(keyType)>(0, i);
+                tuple.set<WrappedTypeForTupleMap.(valueType)>(1, valueList.get(i));
+                tuple.set<WrappedTypeForTupleMap.(deltaType)>(2, deltaList.get(i).get());
+                if(!queryVisitor.visit(tuple))
+                    break;
+            <endif>
+	    }
+	    queryVisitor.finish();
+	}
+
+	@Override
+	public synchronized int getSize(){
+	    return size;
+	}
+}
+>>

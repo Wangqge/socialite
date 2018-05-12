@@ -1,0 +1,28 @@
+CHECK_INTERVAL = 1000
+CHECK_TYPE = VALUE
+CHECK_COND = GE
+CHECK_THRESHOLD = 0.9999
+PRIORITY_TYPE = NONE
+SCHEDULE_PORTION = 0.20
+# ASYNC/SYNC/SEMI-ASYNC
+ENGINE_TYPE = SYNC
+MESSAGE_TABLE_UPDATE_THRESHOLD = 1000
+MESSAGE_TABLE_WAITING_INTERVAL = 1000
+INIT_SIZE = 4847571
+THREAD_NUM = 16
+#PRINT_RESULT = TRUE
+RULE:
+Node(int n:0..4847570).
+Rank(int n:0..4847570, double rank).
+Edge(int n:0..4847570, (int t)).
+EdgeCnt(int n:0..4847570, int cnt).
+
+Edge(s, t) :- l=$read("/home/gengl/Datasets/PageRank/LiveJournal/edge.txt"), (s1,s2)=$split(l, "	"),
+             s=$toInt(s1), t=$toInt(s2).
+
+
+Node(n) :- l=$read("/home/gengl/Datasets/PageRank/LiveJournal/node.txt"), n=$toInt(l).
+
+EdgeCnt(s, $inc(1)) :- Edge(s, t).
+Rank(n, r) :- Node(n), r = 0.2 / 4847571.
+Rank(y, $dsum(r1)) :- Rank(x, r), Edge(x, y),  EdgeCnt(x, d), r1 = 0.8 * r / d.

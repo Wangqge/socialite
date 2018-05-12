@@ -1,0 +1,32 @@
+CHECK_INTERVAL = 100
+CHECK_TYPE = DIFF_VALUE
+CHECK_COND = E
+CHECK_THRESHOLD = 0
+SYNC = FALSE
+DYNAMIC = TRUE
+#BARRIER = TRUE
+THREAD_NUM = 4
+SAVE_PATH="/home/gengl/expr/Party"
+#PRINT_RESULT = TRUE
+RULE:
+sure(int X:0..875712).
+cntComing(int X:0..875712, int N).
+friend(int X:0..875712, (int Y)).
+coming(int X:0..875712).
+
+sure(X) :- l=$read("/home/gengl/Datasets/sure.txt"), X=$toInt(l).
+friend(X, Y) :- l=$read("/home/gengl/Datasets/PageRank/Google/edge.txt"), (s1, s2)=$split(l, "	"), X=$toInt(s1), Y=$toInt(s2).
+
+coming(X) :- sure(X).
+cntComing(Y, $dcount(1)) :- coming(X), friend(X, Y).
+coming(X) :- cntComing(X, N), N >= 3.
+//result:
+//2
+//3
+//5
+//8
+//9
+//10
+//4
+//6
+//7

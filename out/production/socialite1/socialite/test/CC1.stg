@@ -1,0 +1,13 @@
+Init(N, PATH, NPATH, SPLITTER) ::= <<
+Edge(int src:0..<N>, (int sink)).
+Edge(s,t) :- l=$read("<PATH>"), (s1,s2)=$split(l, "<SPLITTER>"),
+               s=$toInt(s1), t=$toInt(s2).
+Nodes(int n:0..<N>).
+Comp(int n:0..<N>, int i:iter, int root) groupby (2).
+Nodes(n) :- l=$read("<NPATH>"), n=$toInt(l).
+Comp(n, 0, n) :- Nodes(n).
+>>
+
+Iter(i)::=<<
+Comp(n, <i> + 1, $min(i)) :- Comp(p, <i>, i), Edge(p, n).
+>>

@@ -1,0 +1,368 @@
+group dynamic-table;
+
+import "TableCommon.stg"
+import "Node.stg"
+
+dynamicTable(tableName, name, visitorClass, methods,
+             size, id,
+             columns, pcolumns, gbColumns, gbAggrColumns,
+             sortedCol, idxCols,
+             multiSet=false, isNested=false) ::= <<
+<if(!isNested)>
+package socialite.tables;
+
+<importForTable()>
+<endif>
+
+// dynamicTable
+<if(!isNested)>public<endif> final class <name> extends AbstractTableInst {
+    private static final long serialVersionUID = 1;
+
+    public static int tableid() { return <id>; }
+    public static <name> create() { return new <name>(); }    
+    
+    <node(name, pcolumns, columns, sortedCol)>
+
+    /** synchronization fields and methods */
+    static volatile LockStatus lockStatus = LockStatus.writeLockEnabled;
+    static VoidLock nolock = new VoidLock();
+    static ReentrantReadWriteLock reallock = new ReentrantReadWriteLock();
+
+    static volatile Lock writeLock = reallock.writeLock();
+    static volatile Lock readLock = nolock.readLock();
+
+    static void _enableInternalLock(boolean writeOnly) {
+        writeLock = reallock.writeLock();
+        if (writeOnly) {
+            readLock = nolock.readLock();
+            lockStatus = LockStatus.writeLockEnabled;
+        } else {
+            readLock = reallock.readLock();
+            lockStatus = LockStatus.enabled;
+        }
+    }
+    static void _disableInternalLock() {
+        writeLock = nolock.writeLock();
+        readLock = nolock.readLock();
+        lockStatus = LockStatus.disabled;
+    }
+    static LockStatus _isLockEnabled() {
+        return lockStatus;
+    }
+
+    public void enableInternalLock(boolean writeOnly) {
+        _enableInternalLock(writeOnly);
+    }
+    public void disableInternalLock() {
+        _disableInternalLock();
+    }
+    public LockStatus isLockEnabled() {
+        return _isLockEnabled();
+    }
+
+    void wlock() { writeLock.lock(); }
+    void wunlock() { writeLock.unlock(); }
+
+    void rlock() { readLock.lock(); }
+    void runlock() { readLock.unlock(); }
+
+    // forces acquiring readlock even if only write lock is enabled (writeLockEnabled)
+    void force_rlock() {
+        if (lockStatus == LockStatus.writeLockEnabled) {
+            reallock.readLock().lock();
+        } else {
+            readLock.lock();
+        }
+    }
+    void force_runlock() {
+        if (lockStatus == LockStatus.writeLockEnabled) {
+            reallock.readLock().unlock();
+        } else {
+            readLock.unlock();
+        }
+    }
+
+    IndexMap indexMap = new IndexMap();
+    IndexUtil indexUtil = new IndexUtil(this, reallock);
+
+    SArrayList\<Node> nodeList;
+    <if(idxCols)>
+      <if(gbColumns && !rest(gbColumns) && first(gbColumns).indexed)>
+        SIndex1 index<first(idxCols).absPos> = new SIndex1();
+      <else>
+        SIndex index<first(idxCols).absPos> = new SIndex();
+      <endif>
+    <endif>
+
+    <rest(idxCols):{ic|SIndex index<ic.absPos> = new SIndex();<\n>}>
+    <if(gbColumns)>
+    <if(!rest(gbColumns) && first(gbColumns).indexed)>
+        SIndex1 groupbyMap = index<first(gbColumns).absPos>;
+    <else>
+        SIndex1 groupbyMap = new SIndex1();
+    <endif>
+    <endif>
+
+    public <name>() {
+        nodeList = new SArrayList\<Node>(8);
+        <idxCols:{ic|indexMap.put(<ic.absPos>, index<ic.absPos>);<\n>}>
+    }
+
+    public int id() { return <id>; }
+    public int size() { assert false; return -1; }
+    public String name() { return "<tableName>"; }
+
+    public boolean isEmpty() { return nodeList.size() == 0; }
+    public String toString() {
+        String str="Table <tableName>(id=<id>):";
+        return str + nodeList.getQuick(0).toString();
+    }
+    public void clearQuick() { clear(); }
+    public void clear() {
+        nodeList.clear();
+        <idxCols:{ic|index<ic.absPos>.clear();<\n>}>
+        <if(gbColumns)>groupbyMap.clear();<endif>
+    }
+    public boolean contains(<columns:{c|final <c.type> a<i0>};separator=", ">) {
+    <if(idxCols)>
+        if (isEmpty()) { return false; }
+        rlock();
+        try {
+            ColumnConstraints constr = new ColumnConstraints();
+            <idxCols:{ic|constr.add(<ic.absPos>, a<ic.relPos>);<\n>}>
+            RoaringBitmap index = indexUtil.getExclusiveIndex(indexMap, constr);
+            if (index == null) { return false; }
+            IntIterator iter = index.getIntIterator();
+            while (iter.hasNext()) {
+                int val = iter.next();
+                int pos = IndexUtil.getPos(val);
+                int offset = IndexUtil.getOffset(val);
+                Node n = nodeList.getQuick(pos);
+                if (n.contains_at(<columns:{c|a<i0>};separator=", ">, offset)) {
+                    return true;
+                }
+            }
+            return false;
+        } finally {
+            runlock();
+        }
+    <else>
+        rlock();
+        try {
+            for (int i=0; i\<nodeList.size(); i++) {
+                Node n = nodeList.getQuick(i);
+                if (n.contains(<columns:{c|a<i0>};separator=", ">)) {
+                    return true;
+                }
+            }
+            return false;
+        } finally {
+            runlock();
+        }
+    <endif>
+    }
+
+    public boolean contains(<columns:{c|final <c.type> a<i0>};separator=", ">, final boolean[] dontcare) {
+        if (dontcare==null) {return contains(<columns:{c|a<i0>};separator=", ">);}
+    <if(idxCols)>
+        rlock();
+        using_index:
+        try {
+            ColumnConstraints constr = new ColumnConstraints();
+            <idxCols:{ic|if(!dontcare[<ic.relPos>]){constr.add(<ic.absPos>, a<ic.relPos>);\}<\n>}>
+            if (constr.isEmpty()) { break using_index; }
+            RoaringBitmap index = indexUtil.getExclusiveIndex(indexMap, constr);
+            if (index == null) { return false; }
+            IntIterator iter = index.getIntIterator();
+            while (iter.hasNext()) {
+                int val = iter.next();
+                int pos = IndexUtil.getPos(val);
+                int offset = IndexUtil.getOffset(val);
+                Node n = nodeList.getQuick(pos);
+                if (n.contains_at(<columns:{c|a<i0>};separator=", ">, offset)) {
+                    return true;
+                }
+            }
+            return false;
+        } finally {
+            runlock();
+        }
+    <endif>
+        rlock();
+        try {
+            for (int i=0; i\<nodeList.size(); i++) {
+                Node n = nodeList.getQuick(i);
+                if (n.contains(<columns:{c|a<i0>};separator=", ">, dontcare)) {
+                    return true;
+                }
+            }
+            return false;
+        } finally {
+            runlock();
+        }
+    }
+    void addToIndex(<idxCols:{ic|<ic.type> a<ic.relPos> ,}>int pos) {
+        <idxCols:{ic|indexUtil.addIndex(index<ic.absPos>, a<ic.relPos>, pos);<\n>}>
+    }
+    void addToGroupbyMap(<gbColumns:{g|<g.type> a<g.relPos>,}>int pos) {
+    <if(gbColumns)>
+        <if(rest(gbColumns))>
+            Tuple<gbColumns:{g|_<TupleMap.(g.type)>}> groupbyTup = new Tuple<gbColumns:{g|_<TupleMap.(g.type)>}>();
+            <gbColumns:{g|groupbyTup._<i0> = a<i0>;}; separator="\n">
+            indexUtil.addIndex(groupbyMap, groupbyTup, pos);
+        <elseif(first(gbColumns).indexed)>
+            assert groupbyMap == index<first(gbColumns).absPos>;
+        <else>
+            indexUtil.addIndex(groupbyMap, a0, pos);
+        <endif>
+    <endif>
+    }
+
+    public boolean insert(<columns:{c|<c.type> a<i0>};separator=", ">) {
+        wlock();
+    <if(!isNested && !multiSet && !gbColumns)>
+        if (contains(<columns:{c|a<i0>};separator=",">)) {
+            wunlock();
+            return false;
+        }
+    <endif>
+        int offset, nodePos;
+        if (nodeList.size() == 0) {
+            nodePos = 0;
+            Node n = new Node$Init();
+            offset = n.insert(<columns:{c|a<i0>};separator=", ">);
+            nodeList.add(n);
+            wunlock();
+        } else {
+            Node last = nodeList.getQuick(nodeList.size()-1);
+            last.wlock();
+            if (last.isFull()) {
+                last.wunlock();
+                last = new Node();
+                offset = last.insert(<columns:{c|a<i0>};separator=", ">);
+                nodeList.add(last);
+                nodePos = nodeList.size()-1;
+                wunlock();
+            } else {
+                nodePos = nodeList.size()-1;
+                wunlock();
+                offset = last.insert(<columns:{c|a<i0>};separator=", ">);
+                last.wunlock();
+            }
+        }
+        int pos = IndexUtil.makePos(nodePos, offset);
+        addToIndex(<idxCols:{ic|a<ic.relPos> ,}>pos);
+        addToGroupbyMap(<gbColumns:{g|a<g.relPos>, }>pos);
+        return true;
+    }
+
+<if(gbColumns)> //  if (gbColumns) [
+    <groupbyDyn()>
+<endif> // ] if(gbColumns)
+    
+    public void iterate(<visitorClass> v) {
+        rlock();
+        try {
+            for (int i=0; i\<nodeList.size(); i++) {
+                Node n = nodeList.getQuick(i);
+                boolean cont = n.iterate(v);
+                if (!cont) { return; }
+            }
+         } finally {
+            runlock();
+         }
+    }
+    public void iterate_by(ColumnConstraints constr, final <visitorClass> v) {
+        if (constr.getMaxColumn() \< <first(columns).absPos>) {
+            iterate(v);
+        } else {
+            indexUtil.iterateBy(indexMap, constr, v, this);
+        }
+    }
+
+    public void iterate_at(ColumnConstraints __, int at, Object o) {
+        <visitorClass> v = (<visitorClass>)o;
+        int nodePos =  IndexUtil.getPos(at);
+        int offset = IndexUtil.getOffset(at);
+        rlock();
+        try {
+            Node n = nodeList.getQuick(nodePos);
+            n.iterate_at(__, offset, v);
+        } finally {
+            runlock();
+        }
+    }
+
+    <methods;separator="\n">
+}
+>>
+
+groupbyGet() ::= <<
+<if(rest(gbColumns))>
+    Tuple<gbColumns:{g|_<TupleMap.(g.type)>}> groupbyTup = new Tuple<gbColumns:{g|_<TupleMap.(g.type)>}>();
+    <gbColumns:{g|groupbyTup._<i0> = a<i0>;}; separator="\n">
+    int pos = groupbyMap.get1(groupbyTup);
+<else>
+    int pos = groupbyMap.get1(a0);
+<endif>
+>>
+groupbyGet2() ::= <<
+<if(rest(gbColumns))>
+    pos = groupbyMap.get1(groupbyTup);
+<else>
+    pos = groupbyMap.get1(a0);
+<endif>
+>>
+getNodeAndOffset() ::= <<
+    int nodePos = IndexUtil.getPos(pos);
+    Node n = nodeList.getQuick(nodePos);
+    int offset = IndexUtil.getOffset(pos);
+>>
+
+groupbyDyn() ::= <<
+    public boolean groupby_update(<columns:{c|<c.type> a<i0>,}><gbAggrColumns:{c|AbstractAggregation f<i0>};separator=",">) {
+        force_rlock();
+        <groupbyGet()>
+        if (pos \< 0) {
+            force_runlock();
+            wlock();
+            <groupbyGet2()>
+            if (pos \< 0) {
+                insert(<columns:{c|a<i0>}; separator=", ">);
+                wunlock();
+                return true;
+            } else {
+                wunlock();
+                // fall through to update value
+            }
+        } else {
+            force_runlock();
+        }
+    // update value:
+        boolean updatedAcc = false;
+        <getNodeAndOffset()>
+
+        n.wlock();
+        try {
+        <gbAggrColumns: {c|
+            if (f<i0>!=null) {
+                <c.type> oldVal<i0> = n.col<c.relPos>(offset);
+                <c.type> ans<i0> = f<i0>.apply(oldVal<i0>, a<c.relPos>);
+                boolean updated = !(ans<i0><EqOpMap.(c.type)>(oldVal<i0>));
+                if (updated) {
+                    a<c.relPos> = ans<i0>;
+                \} else {
+                    a<c.relPos> = oldVal<i0>;
+                \}
+                updatedAcc |= updated;
+            \}
+        }>
+            if (updatedAcc) {
+                n.update(offset<columns:{c|, a<i0>}>);
+                return true;
+            } else {
+                return false;
+            }
+        } finally { n.wunlock(); }
+    }
+>>

@@ -1,0 +1,28 @@
+CHECK_INTERVAL = 1000
+CHECK_TYPE = VALUE
+CHECK_COND = GE
+CHECK_THRESHOLD = 0.9999
+PRIORITY_TYPE = NONE
+SCHEDULE_PORTION = 0.20
+# ASYNC/SYNC/SEMI-ASYNC
+ENGINE_TYPE = ASYNC
+MESSAGE_TABLE_UPDATE_THRESHOLD = 100000
+MESSAGE_TABLE_WAITING_INTERVAL = 100
+INIT_SIZE = 12150975
+THREAD_NUM = 1
+#PRINT_RESULT = TRUE
+RULE:
+Node(int n:0..12150975).
+Rank(int n:0..12150975, double rank).
+Edge(int n:0..12150975, (int t)).
+EdgeCnt(int n:0..12150975, int cnt).
+
+Edge(s, t) :- l=$read("hdfs://master:9000/Datasets/wikipedia_link_en/edge_pair.txt"), (s1,s2)=$split(l, "	"),
+             s=$toInt(s1), t=$toInt(s2).
+
+
+Node(n) :- l=$read("hdfs://master:9000/Datasets/wikipedia_link_en/node.txt"), n=$toInt(l).
+
+EdgeCnt(s, $inc(1)) :- Edge(s, t).
+Rank(n, r) :- Node(n), r = 0.2 / 12150975.
+Rank(y, $dsum(r1)) :- Rank(x, r), Edge(x, y),  EdgeCnt(x, d), r1 = 0.8 * r / d.

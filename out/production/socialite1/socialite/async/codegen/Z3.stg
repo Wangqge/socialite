@@ -1,0 +1,24 @@
+Convert(gVarList, gFuncExpr, fVarList, fFuncExpr) ::= <<
+(declare-const c Real)
+
+
+(define-fun g (<gVarList:{var|(<var> Real)}; separator=" ">) Real
+    <gFuncExpr>
+)
+
+(define-fun f (<fVarList:{var|(<var> Real)}; separator=" ">) Real
+    <fFuncExpr>
+)
+
+(declare-fun g1 ((Real) (Real)) Real)
+
+(assert (> c 0))
+(assert (\< c 1))
+(assert (forall ((x Real) (y Real) (d Real))
+   (! (= (f (g1 x y)) (g1 (f x) (f y))))))
+(assert (forall ((x Real) (y Real))
+   (= (g x y) (+ (g1 x y) c))))
+
+(check-sat)
+(get-model)
+>>

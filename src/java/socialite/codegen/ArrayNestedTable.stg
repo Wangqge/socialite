@@ -1,0 +1,400 @@
+group array-nested-table;
+
+import "TableCommon.stg"
+
+newArrayNestedTable(var, name, id, partitionMap) ::= <<
+for(int $i=0; $i\< <partitionMap>.partitionNum(<id>); $i++) {
+    <var>[$i]=<name>.create(<partitionMap>.partitionBegin(<id>,$i),
+                            <partitionMap>.partitionSize(<id>,$i));
+};
+>>
+
+arrayNestedTable(tableName, name, visitorClass, nestedTable, classes,
+                 base, size,
+                 methods, id,
+                 columns, pcolumns, nestedColumns, nestedNestedColumns,
+                 gbColumns, gbNestedColumns, gbAggrColumns,
+                 idxCols,
+                 multiSet=false, isNested=false) ::= <<
+<if(!isNested)>
+package socialite.tables;
+
+<importForTable()>
+<endif>
+
+// ArrayNestedTable
+<if(!isNested)>public<endif> class <name> extends AbstractTableInst {
+    private static final long serialVersionUID = 1;
+    
+    public static int tableid() { return <id>; }
+    
+    public static <name> create() { return new <name>(<base>, <size>); }
+    public static <name> create(<first(columns).type> base, int size) { return new <name>(base, size); }
+<if(IsInt.(first(columns).type))>
+    public static <name> create(Integer base, Integer size) { return new <name>(base.intValue(), size.intValue()); }
+<else>
+    public static <name> create(Long base, Integer size) { return new <name>(base.longValue(), size.intValue()); }
+<endif>
+
+    static volatile LockStatus lockStatus = LockStatus.writeLockEnabled;
+    static ReadWriteLock rwlock = new ReentrantReadWriteLock();
+
+    static void _enableInternalLock(boolean writeOnly) {
+        if (writeOnly) {
+            lockStatus = LockStatus.writeLockEnabled;
+        } else {
+            lockStatus = LockStatus.enabled;
+        }
+        <nestedTable>._enableInternalLock(writeOnly);
+    }
+    static void _disableInternalLock() {
+        lockStatus = LockStatus.disabled;
+        <nestedTable>._disableInternalLock();
+    }
+    static LockStatus _isLockEnabled() {
+        return lockStatus;
+    }
+
+    public void enableInternalLock(boolean writeOnly) {
+        _enableInternalLock(writeOnly);
+    }
+
+    public void disableInternalLock() {
+        _disableInternalLock();
+    }
+    public LockStatus isLockEnabled() {
+        return _isLockEnabled();
+    }
+
+    <first(columns).type> base;
+    AtomicByteArray filled;
+
+<if(pcolumns)>
+    <rest(pcolumns):{c|<c.type> pcol<c.pos>[];<\n>}>
+    void allocColumns(int size) {
+        <rest(pcolumns):{c|pcol<c.pos> = new <c.type>[size];<\n>}>
+    }
+    <rest(columns):{c|
+        private void setCol<i>(int i, <c.type> val) {
+        <if(c.bitPacked)>
+            val = val \<\< <c.bitShift>;
+            pcol<c.pcolIdx>[i] = pcol<c.pcolIdx>[i] ^ ((pcol<c.pcolIdx>[i] ^ val) & <c.bitMask>);
+        <else>
+            pcol<c.pcolIdx>[i] = val;
+        <endif>
+        \}<\n>}>
+    <rest(columns):{c|
+        <c.type> col<i>(int i) {
+        <if(c.bitPacked)>
+            <c.type> v = (pcol<c.pcolIdx>[i] & <c.bitMask>) >\>> <c.bitShift>;
+            //int m = 32 - <c.numBits>;
+            //return (v \<\< m) >\> m; // sign extending
+            return v;
+        <else>
+            return pcol<c.pcolIdx>[i];
+        <endif>
+        \}<\n>}>
+<else>
+    <rest(columns):{c|<c.type> col<i>[];<\n>}>
+    void allocColumns(int size) {
+        <rest(columns):{c|
+            <if(c.arrayType)> col<i> = new <c.compType>[size][];
+            <else> col<i> = new <c.type>[size];
+            <endif>}>
+    }
+    <rest(columns):{c|
+        <c.type> col<i>(int i) {
+            return col<i>[i];
+        \}}>
+     <rest(columns):{c|
+        private void setCol<i>(int i, <c.type> val) {
+            col<i>[i] = val;
+        \}<\n>}>
+<endif>
+
+    IndexMap indexMap = new IndexMap();
+    IndexUtil indexUtil = new IndexUtil(this, rwlock);
+
+    <idxCols:{ic|SIndex index<ic.absPos> = new SIndex();<\n>}>
+    public <nestedTable>[] nestedTables;
+
+    boolean isEmpty = true;
+    
+    public <name>() { }
+    public <name>(<first(columns).type> _base, int size) {
+        base = _base;
+        filled = new AtomicByteArray(size);
+        allocColumns(size);
+        <idxCols:{ic|indexMap.put(<ic.absPos>, index<ic.absPos>);<\n>}>
+        nestedTables = new <nestedTable>[size];
+    }
+
+    /** synchronization fields and methods */
+    final static byte emptyMarker = -100, writeMarker = -1;
+    void _lock(int i, byte marker) {
+        assert marker \< 0;
+        int count = 0, maxTry = 10;
+        boolean locked = false;
+        while (true) {
+            locked = filled.compareAndSet(i, (byte)0, (byte)(emptyMarker + marker));
+            if (locked) { break; }
+            locked = filled.compareAndSet(i, (byte)1, (byte)marker);
+            if (locked) { break; }
+            if (count++ > maxTry) {
+                count = 0;
+                Thread.yield();
+            }
+        }
+    }
+    void markFilled(int i) {
+        if (lockStatus == LockStatus.disabled) {
+            filled.set(i, (byte)1);
+        } else {
+            // wunlock() will mark the slot.
+        }
+    }
+    void wlock(int i) {
+        if (lockStatus == LockStatus.disabled) { return; }
+
+        _lock(i, writeMarker);
+    }
+    void wunlock(int i) {
+        if (lockStatus == LockStatus.disabled) { return; }
+
+        filled.set(i, (byte)1);
+    }
+
+    public boolean isEntryEmpty(int i) {
+        int flag = filled.get(i);
+        return (flag == 0 || flag \< emptyMarker);
+    }
+
+    public <first(columns).type> base() { return base;}
+    public int length() { return nestedTables.length; }
+    public int size() { throw new UnsupportedOperationException(); }
+    public boolean isEmpty() { return isEmpty; }
+    public int id() { return <id>; }
+    public String name() { return "<tableName>"; }
+    
+    public void clearQuick() { clear(); }
+    public void clear() {
+        filled.fill((byte)0);
+        isEmpty = true;
+        for (int i=0; i\<nestedTables.length; i++) {
+            if (nestedTables[i]!=null) { nestedTables[i].clear(); }
+        }
+    }
+
+    public int totalAllocSize() {
+        int totalAlloc = 8+filled.length();
+        <columns:{c|totalAlloc += 12+<c.typeSize>*filled.length();<\n>}>
+        for (int i=0; i\<filled.length(); i++) {
+            totalAlloc += nestedTables[i].totalAllocSize();
+        }
+        return totalAlloc;
+    }
+
+    void rangeCheck(<first(columns).type> i) {
+        if (i\<0 || i>=nestedTables.length) {
+            throw new SociaLiteException("Value out of range for <tableName> <first(columns).absPos>'th column: "+(i+base));
+        }
+    }
+
+    public boolean contains_prefix(<first(columns).type> n<rest(columns):{c|, <c.type> a<i>}>) {
+        int i=(int)(n-base); rangeCheck(i);
+        if (isEntryEmpty(i)) { return false; }
+
+        return true<rest(columns): {c|&&(col<i>(i)<EqOpMap.(c.type)>(a<i>))}>;
+    }
+    public boolean contains(int n<rest(columns):{c|, <c.type> a<i>}><nestedColumns:{c|, <c.type> b<i>}>) {
+        boolean contains_prefix=contains_prefix(n<rest(columns):{c|, a<i>}>);
+        if (!contains_prefix) { return false; }
+
+        int i=(int)(n-base);
+        return nestedTables[i].contains(<nestedColumns:{c|b<i>}; separator=", ">);
+    }
+    public boolean insert(<columns:{c|<c.type> a<i0>};separator=","><nestedColumns:{c|, <c.type> b<i>}>) {
+        int i=(int)(a0-base); rangeCheck(i);
+        wlock(i);
+        try {
+            return insert_really(<columns:{c|a<i0>};separator=","><nestedColumns:{c|,b<i>}>);
+        } finally {
+            wunlock(i);
+        }
+    }
+    boolean insert_really(<columns:{c|<c.type> a<i0>};separator=","><nestedColumns:{c|, <c.type> b<i>}>) {
+        int i=(int)(a0-base);
+    <if(!isNested && !multiSet)>
+        if (contains(<columns:{c|a<i0>};separator=","><nestedColumns:{c|, b<i>}>)) {
+            return false;
+        }
+    <endif>
+        if (!isEntryEmpty(i)) {
+            if (!contains_prefix(<columns:{c|a<i0>};separator=",">)) {
+                String msg = "Cannot insert the tuple {"+a0<rest(columns):{c|+","+a<i>}> +", ...} to <tableName>\n";
+                 msg += "<tableName> already contains {"+a0<rest(columns):{c|+","+col<i>(i)}> +", ...} with the same 1st (array index) column\n";
+                 throw new SociaLiteException(msg);
+             }
+        }
+        if (isEmpty) { isEmpty = false; }
+
+        <rest(columns): {c|col<i>[i] = a<i>;};separator="\n">
+
+        <nestedTable> nested = nestedTables[i];
+        if (nestedTables[i]==null) { nested = nestedTables[i] = <nestedTable>.create(); }
+        nested.insert(<nestedColumns:{c|b<i>};separator=", ">);
+        <idxCols:{ic|index<ic.relPos>.add(a<ic.relPos>, i);<\n>}>
+        markFilled(i);
+        return true;
+    }
+
+    public void iterate(<visitorClass> v) {
+        if (isEmpty) { return; }
+        for (int i=0; i\<nestedTables.length; i++) {
+            if (!isEntryEmpty(i)) {
+                boolean cont=v.visit<columns:{c|_<c.absPos>}>(i+base<rest(columns):{c|, col<i>(i)}>);
+                if (cont) { nestedTables[i].iterate(v); }
+            }
+        }
+    }
+
+    public void iterate_at(ColumnConstraints constr, int offset, Object o) {
+        if (isEmpty) { return; }
+        <visitorClass> v = (<visitorClass>)o;
+        if (!isEntryEmpty(offset)) {
+            <first(columns).type> val = base+(<first(columns).type>)offset;
+            boolean cont=v.visit<columns:{c|_<c.absPos>}>(val<rest(columns):{c|, col<i>(offset)}>);
+            if (cont) {
+            }
+        }
+    }
+
+    public void iterate_by(ColumnConstraints constr, <visitorClass> v) {
+        if (isEmpty) { return; }
+
+        if (constr.hasRange(<first(columns).absPos>)) {
+            iterate_range(constr.getRange(<first(columns).absPos>), constr, v);
+        } else if (constr.hasColumn(<first(columns).absPos>)) {
+            <first(columns).type> val = constr.getColumnValue(<first(columns).absPos>).getValue((<first(columns).type>)0);
+            int offset = (int)(val - base);
+            if (offset\<0||offset>=filled.length()) { return; }
+            if (!isEntryEmpty(offset)) {
+                boolean cont=v.visit<columns:{c|_<c.absPos>}>(val<rest(columns): {c|,col<i>(offset)}>);
+                if (cont) {
+                    nestedTables[offset].iterate_by(constr, v);
+                }
+            }
+        } else if (constr.getMinColumn() > <last(columns).absPos>) {
+            for (int i=0; i\<nestedTables.length; i++) {
+                if (!isEntryEmpty(i)) {
+                    boolean cont=v.visit<columns:{c|_<c.absPos>}>(i+base<rest(columns):{c|, col<i>(i)}>);
+                    if (cont) { nestedTables[i].iterate_by(constr, v); }
+                }
+            }
+        } else if (constr.getMaxColumn() \< <first(columns).absPos>) {
+            iterate(v);
+        } else {
+            indexUtil.iterateBy(indexMap, constr, v, this);
+        }
+    }
+
+    public void iterate_range(ColumnRange range, ColumnConstraints constr, <visitorClass> v) {
+        <first(columns).type> from = Math.max(range.getFrom((<first(columns).type>)0) - base, 0);
+        <first(columns).type> to = Math.min(range.getTo((<first(columns).type>)0) - base, nestedTables.length);
+        rangeCheck(from);
+        for (int i=from; i\<to; i++) {
+            if (!isEntryEmpty(i)) {
+                boolean cont=v.visit<columns:{c|_<c.absPos>}>(i+base<rest(columns):{c|, col<i>(i)}>);
+                if (cont) { nestedTables[i].iterate_by(constr, v); }
+            }
+        }
+    }
+
+    <methods;separator="\n">
+
+    // groupby operations
+<if(gbColumns)> // if(gbColumns) [
+    <groupbyArrayNested()>
+<endif> // ] if(gbColumns)
+}
+<classes; separator="\n">    
+>>
+
+
+groupbyArrayNested() ::= <<
+<if(nestedNestedColumns)>
+    static long shiftGroupby(long pos) { return pos \<\< (64-21); }
+    static long composeGroupby(int pos, long offset) { return shiftGroupby(pos)|offset; }
+    static int getGroupbyPos(long pos) { return (int)(pos >\>> (64-21)); }
+    static long getGroupbyOffset(long pos) { return pos & 0x000007ffffffffffL; }
+<else>
+    static long shiftGroupby(long pos) { return pos \<\< 21; }
+    static long composeGroupby(int pos, long offset) { return shiftGroupby(pos)|offset; }
+    static int getGroupbyPos(long pos) { return (int)(pos >\>> 21); }
+    static long getGroupbyOffset(long pos) { return pos & 0x00000000001fffffL; }
+<endif>
+
+<if(gbNestedColumns)> // if(gbNestedColumns) [
+    public boolean groupby_update(<columns:{c|<c.type> a<i0>,}><nestedColumns:{c|<c.type> b<i0>,}>
+                                  <gbAggrColumns:{c|AbstractAggregation f<i0>};separator=",">) {
+        int i=(int)(a0-base); rangeCheck(i);
+
+        boolean updated = false;
+        wlock(i);
+        if (isEntryEmpty(i)) {
+            updated = insert_really(<columns:{c|a<i0>};separator=","><nestedColumns:{c|,b<i0>}>);
+            wunlock(i);
+        } else if (true<rest(gbColumns):{c|&&(col<i>[i]<EqOpMap.(c.type)>(a<i>))}>) {
+            wunlock(i);
+            updated = nestedTables[i].groupby_update(<nestedColumns:{c|b<i0>,}><gbAggrColumns:{c|f<i0>};separator=",">);
+        } else {
+            wunlock(i);
+            throw new AssertionError("Unexpected groupby operation");
+        }
+        return updated;
+    }
+<else> // if(!gbNestedColumns) [
+    public boolean groupby_update(<columns:{c|<c.type> a<i0>,}><nestedColumns:{c|,<c.type> b<i0>,}>
+                                  <gbAggrColumns:{c|AbstractAggregation f<i0>};separator=",">) {
+        int i=(int)(a0-base); rangeCheck(i);
+
+        boolean updatedAcc = false;
+        boolean equals = false;
+        wlock(i);
+        try {
+            if (isEntryEmpty(i)) {
+                return insert_really(<columns:{c|a<i0>};separator=","><nestedColumns:{c|,b<i0>}>);
+            } else if (true<rest(gbColumns):{c|&&(col<i>(i)<EqOpMap.(c.type)>(a<i>))}>) {
+            <gbAggrColumns: {c|
+                if (f<i0>!=null) {
+                    <c.type> oldVal<i0> = col<c.relPos>(i);
+                    <c.type> ans<i0> = f<i0>.apply(oldVal<i0>, a<c.relPos>);
+
+                    equals &= a<c.relPos><EqOpMap.(c.type)>(oldVal<i0>);
+                    boolean updated = !(ans<i0><EqOpMap.(c.type)>(oldVal<i0>));
+                    if (updated) {
+                        a<c.relPos> = ans<i0>;
+                    \} else {
+                        a<c.relPos> = oldVal<i0>;
+                    \}
+                    updatedAcc |= updated;
+                \}
+            }>
+                if (updatedAcc) {
+                    <rest(columns): {c|setCol<i>(i, a<i>);<\n>}>;
+                    nestedTables[i].clear();
+                    nestedTables[i].insert(offset<nestedColumns:{c|, b<i0>}>);
+                    return true;
+                } else {
+                    if (equals) {
+                        nestedTables[i].insert(offset<nestedColumns:{c|, b<i0>}>);
+                    }
+                    return false;
+                }
+            } else {
+                throw new AssertionError("Unexpected groupby operation");
+            }
+        } finally { wunlock(i); }
+    }
+<endif> // // ] gbNestedColumns
+>>

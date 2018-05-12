@@ -1,0 +1,63 @@
+THIS ENVIRONMENT IS TESTED! 
+
+Last edit:
+Feb 9, 2018, Liang
+
+
+For Shared-Memory, just click run button in IDE directly. The web-google dataset is used for pagerank algorithm test. One thing should noticed that every node should have out-degree, otherwise the incorrect result or crash may occurred.
+
+For distributed test, 
+open the terminal,
+1. cd socialite
+2. bin/run.py examples/PageRank/Google.dl
+
+WARN:
+1. YOU MUST CONFIGURE THE VMWare EQUALS OR MORE THAN 2 CPU CORES, ORTHERWISE THE SOCIALITE WILL REPORT EXCEPTION. THIS IS SOCIALITE BUG BUT NOT CAUSED BY MYSELF.
+2. THIS ENVIRONMENT JUST FOR TEST, DO NOT PROCEED ANY PERFORMANCE EXPERIMENTS ON THE VM MACHINE.
+
+INSTRUCTIONS
+
+Configure distributed environment:
+
+1.compile openmpi 2.1.2
+  download and extract openmpi-2.1.2.tar.gz
+  ./configure --prefix /opt/openmpi-2.1.2 --enable-mpi-java
+  make all
+  sudo make install
+
+2.install JDK
+  sudo add-apt-repository ppa:webupd8team/java
+  sudo apt-get update
+  sudo apt-get install oracle-java8-installer
+
+3.configure environment variables
+  vim ~/.bashrc
+  append to the '.bashrc' file:
+
+  export JAVA_HOME=/usr/lib/jvm/java-8-oracle
+  export SOCIALITE_PREFIX=/home/neu/socialite
+  export MPI_HOME=/opt/openmpi-2.1.2
+  export PATH=$PATH:$JAVA_HOME/bin:$MPI_HOME/bin
+
+4.edit machines file
+  machines file tells MPI where and how many process to start-up. The first line of conf/machines describe the master hostname and process number to run. e.g. "ubuntu slots=5" means start 5 process on the machine "ubuntu", including 1 master process and 4 worker processes.
+  Another example:
+########################
+  master slots=9
+  hadoop0 slots=4
+  hadoop1 slots=4
+  hadoop2 slots=4
+  hadoop3 slots=4
+########################
+  This file means there are total 25 processes to run, including 1 master process run on master, and 24 worker process run across from master to hadoop3
+
+5.about dataset
+  Every node should have out-degree (mentioned above)
+  For distributed experiments, you can put the datasets on every machine in the same path or just put the datasets on hdfs.
+
+6.about debugging and formal experiment
+  For debugging, you should edit bin/common.py line 16, to tell the java to run the bytecodes compiled by Intellij IDEA. AFTER EDITED THE CODE, YOU SHOULD CLICK Build-Build Project TO GENERATE LATEST BYTECODE!!!! AND THEN RUN THE bin/run.py SCRIPT.
+  For formal experiment:
+  1. cd socialite
+  2. ant compile
+  3. edit the bin/common.py line 16, replace with "ENTRY_CLASS_PATH = SOCIALITE_PREFIX + '/classes/socialite.jar'"

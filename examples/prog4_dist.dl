@@ -1,0 +1,17 @@
+CHECK_INTERVAL = 1500
+CHECK_TYPE = DELTA
+CHECK_COND = E
+CHECK_THRESHOLD = 0
+DYNAMIC = TRUE
+THREAD_NUM = 1
+RULE:
+edge(int src:0..4, (int dst)).
+cpaths(int src:0..4, (int dst, int count)).
+edge(s, d) :- l=$read("hdfs://master:9000/examples/prog4_edge.txt"),  (s1,s2)=$split(l, "	"),
+                     s=$toInt(s1), d=$toInt(s2).
+cpaths(y, x, 1) :- edge(x, y).
+cpaths(X, Y, $dcount(C1)) :- cpaths(X, Z, C), edge(Z, Y), C1 = C.
+
+#dist
+#cpaths(int src, (int dst:0..5, int count)).
+#cpaths(X, Y, $dcount(C1)) :- cpaths(Z, X, C), edge(Z, Y), C1 = C.

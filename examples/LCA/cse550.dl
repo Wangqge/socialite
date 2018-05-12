@@ -1,0 +1,21 @@
+CHECK_INTERVAL = 500
+CHECK_TYPE = DELTA
+CHECK_COND = E
+CHECK_THRESHOLD = 0
+PRIORITY_TYPE = NONE
+SCHEDULE_PORTION = 0.20
+# ASYNC/SYNC/SEMI-ASYNC
+ENGINE_TYPE = SYNC
+DYNAMIC = TRUE
+MESSAGE_TABLE_UPDATE_THRESHOLD = 1000
+MESSAGE_TABLE_WAITING_INTERVAL = 1000
+INIT_SIZE = 10
+THREAD_NUM = 2
+RULE:
+cite(int y:0..3774767, (int x)).
+ancestor(int Y:0..3774767, (int X, int depth)).
+
+cite(y, x) :- l=$read("/home/gengl/Datasets/Shared-Memory/LCA/cit-Patents_fix.txt"), (s1,s2)=$split(l, "	"), y=$toInt(s1), x=$toInt(s2).
+
+ancestor(Y, X, 1) :- cite(Y, X), X < 3.
+ancestor(Z, X, $dmin(D1)) :- ancestor(Z, Y, D), cite(Y, X), D1 = D + 1.

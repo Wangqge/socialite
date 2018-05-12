@@ -1,0 +1,440 @@
+group dynamic-nested-table;
+import "TableCommon.stg"
+import "NodeNested.stg"
+
+dynamicNestedTable(tableName, name, visitorClass, nestedTable, classes, methods, 
+        size, id, 
+        pcolumns, columns, nestedColumns, nestedNestedColumns,
+        gbColumns, gbNestedColumns, gbAggrColumns,
+        sortedCol, idxCols,
+        concurrent=false, multiSet=false, isNested=false) ::= <<
+<if(!isNested)>
+package socialite.tables;
+
+<importForTable()>
+<endif>
+
+// dynamicNestedTable
+<if(!isNested)>public<endif> class <name> extends AbstractTableInst {
+    private static final long serialVersionUID = 1;
+    
+    public static int tableid() { return <id>; }
+    public static <name> create() { return new <name>(); }
+    
+    <nodeNested(name, pcolumns, columns, nestedColumns, sortedCol, nestedTable)>
+
+    /** synchronization fields and methods */
+    static volatile LockStatus lockStatus = LockStatus.writeLockEnabled;
+    static VoidLock nolock = new VoidLock();
+    static ReentrantReadWriteLock reallock = new ReentrantReadWriteLock();
+
+    static volatile Lock writeLock = reallock.writeLock();
+    static volatile Lock readLock = nolock.readLock();
+
+    static void _enableInternalLock(boolean writeOnly) {
+        writeLock = reallock.writeLock();
+        if (writeOnly) {
+            readLock = nolock.readLock();
+            lockStatus = LockStatus.writeLockEnabled;
+        } else {
+            readLock = reallock.readLock();
+            lockStatus = LockStatus.enabled;
+        }
+        <nestedTable>._enableInternalLock(writeOnly);
+    }
+    static void _disableInternalLock() {
+        writeLock = nolock.writeLock();
+        readLock = nolock.readLock();
+        lockStatus = LockStatus.disabled;
+    }
+    static LockStatus _isLockEnabled() {
+        return lockStatus;
+    }
+
+    public void enableInternalLock(boolean writeOnly) {
+        _enableInternalLock(writeOnly);
+    }
+    public void disableInternalLock() {
+        _disableInternalLock();
+    }
+    public LockStatus isLockEnabled() {
+        return _isLockEnabled();
+    }
+
+    void wlock() { writeLock.lock(); }
+    void wunlock() { writeLock.unlock(); }
+
+    void rlock() { readLock.lock(); }
+    void runlock() { readLock.unlock(); }
+
+    // forces acquiring readlock even if only write lock is enabled (writeLockEnabled)
+    void force_rlock() {
+        if (lockStatus == LockStatus.writeLockEnabled) {
+            reallock.readLock().lock();
+        } else {
+            readLock.lock();
+        }
+    }
+    void force_runlock() {
+        if (lockStatus == LockStatus.writeLockEnabled) {
+            reallock.readLock().unlock();
+        } else {
+            readLock.unlock();
+        }
+    }
+
+    IndexMap indexMap = new IndexMap();
+    IndexUtil indexUtil = new IndexUtil(this, reallock);
+
+    SArrayList\<Node> nodeList;
+    <if(idxCols)>
+      <if(gbColumns && !rest(gbColumns) && first(gbColumns).indexed)>
+        SIndex1 index<first(idxCols).absPos> = new SIndex1();
+      <else>
+        SIndex index<first(idxCols).absPos> = new SIndex();
+      <endif>
+    <endif>
+
+    <rest(idxCols):{ic|SIndex index<ic.relPos> = new SIndex();<\n>}>
+    <if(gbColumns)>
+    <if(!rest(gbColumns) && first(gbColumns).indexed)>
+        SIndex1 groupbyMap = index<first(gbColumns).absPos>;
+    <else>
+        SIndex1 groupbyMap = new SIndex1();
+    <endif>
+    <endif>
+
+    public <name>() {
+        nodeList = new SArrayList\<Node>(8);
+        <idxCols:{ic|indexMap.put(<ic.absPos>, index<ic.absPos>);<\n>}>
+    }
+
+
+    public int id() { return <id>; }
+    public int size() { assert false; return -1; }
+    public String name() { return "<tableName>"; }
+
+    public boolean isEmpty() { return nodeList.size() == 0; }
+    public String toString() {
+        String str="Table <tableName>(id=<id>):";
+        return str + nodeList.getQuick(0).toString();
+    }
+    public void clearQuick() { clear(); }
+    public void clear() {
+        nodeList.clear();
+        <idxCols:{ic|index<ic.absPos>.clear();<\n>}>
+        <if(gbColumns)>groupbyMap.clear();<endif>
+    }
+
+    public boolean contains(<columns:{c|final <c.type> a<i0>};separator=", "><nestedColumns:{c|, final <c.type> b<i0>}>) {
+    <if(idxCols)>
+        if (isEmpty()) { return false; }
+        rlock();
+        try {
+            ColumnConstraints constr = new ColumnConstraints();
+            <idxCols:{ic|constr.add(<ic.absPos>, a<ic.relPos>);<\n>}>
+            RoaringBitmap index = indexUtil.getExclusiveIndex(indexMap, constr);
+            if (index == null) { return false; }
+            IntIterator iter = index.getIntIterator();
+            while (iter.hasNext()) {
+                int val = iter.next();
+                int pos = IndexUtil.getPos(val);
+                int offset = IndexUtil.getOffset(val);
+                Node n = nodeList.getQuick(pos);
+                if (n.contains_at(<columns:{c|a<i0>};separator=", "><nestedColumns:{c|, b<i0>}>, offset)) {
+                    return true;
+                }
+            }
+            return false;
+        } finally {
+            runlock();
+        }
+    <else>
+        rlock();
+        try {
+            for (int i=0; i\<nodeList.size(); i++) {
+                Node n = nodeList.getQuick(i);
+                if (n.contains(<columns:{c|a<i0>};separator=", "><nestedColumns:{c|, b<i0>}>)) {
+                    return true;
+                }
+            }
+            return false;
+        } finally {
+            runlock();
+        }
+    <endif>
+    }
+
+    void addToIndex(<idxCols:{ic|<ic.type> a<ic.relPos> ,}>int pos) {
+        <idxCols:{ic|indexUtil.addIndex(index<ic.absPos>, a<ic.relPos>, pos);<\n>}>
+    }
+    void addToGroupbyMap(<gbColumns:{g|<g.type> a<g.relPos>,}>int pos) {
+    <if(gbColumns)>
+        <if(rest(gbColumns))>
+            Tuple<gbColumns:{g|_<TupleMap.(g.type)>}> groupbyTup = new Tuple<gbColumns:{g|_<TupleMap.(g.type)>}>();
+            <gbColumns:{g|groupbyTup._<i0> = a<i0>;}; separator="\n">
+             indexUtil.addIndex(groupbyMap, groupbyTup, pos);
+        <elseif(first(gbColumns).indexed)>
+             assert groupbyMap == index<first(gbColumns).absPos>;
+        <else>
+            indexUtil.addIndex(groupbyMap, a0, pos);
+        <endif>
+    <endif>
+    }
+
+    boolean insert_with_prefix(<columns:{c|final <c.type> a<i0>};separator=", "><nestedColumns:{c|, final <c.type> b<i0>}>) {
+    <if(idxCols)>
+        ColumnConstraints constr = new ColumnConstraints();
+        <idxCols:{ic|constr.add(<ic.absPos>, a<ic.relPos>);<\n>}>
+        RoaringBitmap index = indexUtil.getExclusiveIndex(indexMap, constr);
+        do {
+            if (index == null) { break; }
+            IntIterator iter = index.getIntIterator();
+            while (iter.hasNext()) {
+                int val = iter.next();
+                int pos = IndexUtil.getPos(val);
+                int offset = IndexUtil.getOffset(val);
+                Node n = nodeList.getQuick(pos);
+                if (true<columns:{c|&&(n.col<i0>(offset)<EqOpMap.(c.type)>(a<i0>))}>) {
+                    n.wlock();
+                    n.nested(offset).insert(<nestedColumns:{c|b<i0>};separator=",">);
+                    n.wunlock();
+                    return true;
+                }
+            }
+            return false;
+        } while(false);
+    <endif>
+        for (int j=0; j\<nodeList.size(); j++) {
+            Node n = nodeList.getQuick(j);
+            for (int i=0; i\<n.len(); i++) {
+                if (true<columns:{c|&&(n.col<i0>(i)<EqOpMap.(c.type)>(a<i0>))}>) {
+                    n.wlock();
+                    n.nested(i).insert(<nestedColumns:{c|b<i0>};separator=",">);
+                    n.wunlock();
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+    public boolean insert(<columns:{c|final <c.type> a<i0>};separator=", "><nestedColumns:{c|, final <c.type> b<i0>}>) {
+        wlock();
+    <if(!isNested && !multiSet)>
+        if (contains(<columns:{c|a<i0>};separator=","><nestedColumns:{c|,b<i0>}>)) {
+            wunlock();
+            return false;
+        }
+    <endif>
+        if (!isEmpty()) {
+            boolean inserted = insert_with_prefix(<columns:{c|a<i0>};separator=", "><nestedColumns:{c|,b<i0>}>);
+            if (inserted) {
+                wunlock();
+                return true;
+            }
+        }
+        int offset, nodePos;
+        if (nodeList.size() == 0) {
+            nodePos = 0;
+            Node n = new Node$Init();
+            offset = n.insert(<columns:{c|a<i0>};separator=", "><nestedColumns:{c|, b<i0>}>);
+            nodeList.add(n);
+            wunlock();
+        } else {
+            Node last = nodeList.getQuick(nodeList.size()-1);
+            last.wlock();
+            if (last.isFull()) {
+                last.wunlock();
+                last = new Node();
+                offset = last.insert(<columns:{c|a<i0>};separator=", "><nestedColumns:{c|, b<i0>}>);
+                nodeList.add(last);
+                nodePos = nodeList.size()-1;
+                wunlock();
+            } else {
+                nodePos = nodeList.size()-1;
+                wunlock();
+                offset = last.insert(<columns:{c|a<i0>};separator=", "><nestedColumns:{c|, b<i0>}>);
+                last.wunlock();
+            }
+        }
+        int pos = IndexUtil.makePos(nodePos, offset);
+        addToIndex(<idxCols:{ic|a<ic.relPos> ,}>pos);
+        addToGroupbyMap(<gbColumns:{g|a<g.relPos>, }>pos);
+        return true;
+    }
+
+<if(gbColumns)> // if (gbColumns) [
+    <groupbyDynNested()>
+<endif> // ] if (gbColumns)
+
+    public void iterate(<visitorClass> v) {
+        rlock();
+        try {
+            for (int i=0; i\<nodeList.size(); i++) {
+                Node n = nodeList.getQuick(i);
+                boolean cont = n.iterate(v);
+                if (!cont) { return; }
+            }
+        } finally {
+            runlock();
+        }
+    }
+
+    public void iterate_by(ColumnConstraints constr, final <visitorClass> v) {
+        if (constr.getMinColumn() > <last(columns).absPos>) {
+            rlock();
+            try {
+                for (int i=0; i\<nodeList.size(); i++) {
+                    Node n = nodeList.getQuick(i);
+                    boolean cont = n.iterate_by(constr, v);
+                    if (!cont) { return; }
+                }
+            } finally {
+                runlock();
+            }
+        } else if (constr.getMaxColumn() \< <first(columns).absPos>) {
+            iterate(v);
+        } else {
+            indexUtil.iterateBy(indexMap, constr, v, this);
+        }
+    }
+     public void iterate_at(ColumnConstraints _, int at, final Object o) {
+        <visitorClass> v = (<visitorClass>)o;
+        int nodePos =  IndexUtil.getPos(at);
+        int offset = IndexUtil.getOffset(at);
+        rlock();
+        try {
+            Node n = nodeList.getQuick(nodePos);
+            n.iterate_at(_, offset, v);
+        } finally {
+            runlock();
+        }
+    }
+    <methods;separator="\n">
+}
+<classes; separator="\n">
+>>
+
+groupbyGet() ::= <<
+<if(rest(gbColumns))>
+    Tuple<gbColumns:{g|_<TupleMap.(g.type)>}> groupbyTup = new Tuple<gbColumns:{g|_<TupleMap.(g.type)>}>();
+    <gbColumns:{g|groupbyTup._<i0> = a<i0>;}; separator="\n">
+    int pos = groupbyMap.get1(groupbyTup);
+<else>
+    int pos = groupbyMap.get1(a0);
+<endif>
+>>
+groupbyGet2() ::= <<
+<if(rest(gbColumns))>
+    pos = groupbyMap.get1(groupbyTup);
+<else>
+    pos = groupbyMap.get1(a0);
+<endif>
+>>
+
+getNodeAndOffset() ::= <<
+    int nodePos = IndexUtil.getPos(pos);
+    Node n = nodeList.getQuick(nodePos);
+    int offset = IndexUtil.getOffset(pos);
+>>
+
+groupbyDynNested() ::= <<
+<if(nestedNestedColumns)>
+    static long shiftGroupby(long pos) { return pos \<\< (64-21); }
+    static long composeGroupby(int pos, long offset) { return shiftGroupby(pos)|offset; }
+    static int getGroupbyPos(long pos) { return (int)(pos >\>> (64-21)); }
+    static long getGroupbyOffset(long pos) { return pos & 0x000007ffffffffffL; }
+<else>
+    static long shiftGroupby(long pos) { return pos \<\< 21; }
+    static long composeGroupby(int pos, long offset) { return shiftGroupby(pos)|offset; }
+    static int getGroupbyPos(long pos) { return (int)(pos >\>> 21); }
+    static long getGroupbyOffset(long pos) { return pos & 0x00000000001fffffL; }
+<endif>
+
+<if(gbNestedColumns)> // if(gbNestedColumns) [
+     public boolean groupby_update(<columns:{c|<c.type> a<i0>,}><nestedColumns:{c|<c.type> b<i0>,}>
+                                   <gbAggrColumns:{c|AbstractAggregation f<i0>};separator=",">) {
+        force_rlock();
+        <groupbyGet()>
+        if (pos \< 0) {
+            force_runlock();
+            wlock();
+            <groupbyGet2()>
+            if (pos \< 0) {
+                insert(<columns:{c|a<i0>};separator=","><nestedColumns:{c|,b<i0>}>);
+                wunlock();
+                return true;
+            } else {
+                wunlock();
+                // fall through to update value
+            }
+        } else {
+            force_runlock();
+        }
+    // update value:
+        boolean updated = false;
+        <getNodeAndOffset()>
+        n.wlock();
+        try {
+            updated = n.nested(offset).groupby_update(<nestedColumns:{c|b<i0>,}><gbAggrColumns:{c|f<i0>};separator=",">);
+        } finally {
+            n.wunlock();
+        }
+        return updated;
+    }
+
+<else> // if (!gbNestedColumns) [
+    public boolean groupby_update(<columns:{c|<c.type> a<i0>,}><nestedColumns:{c|<c.type> b<i0>,}>
+                                  <gbAggrColumns:{c|AbstractAggregation f<i0>};separator=",">) {
+        force_rlock();
+        <groupbyGet()>
+        if (pos \< 0) {
+            force_runlock();
+            wlock();
+            <groupbyGet2()>
+            if (pos \< 0) {
+                insert(<columns:{c|a<i0>};separator=","><nestedColumns:{c|,b<i0>}>);
+                wunlock();
+                return true;
+            } else {
+                wunlock();
+                // fall through to update value
+            }
+        } else {
+            force_runlock();
+        }
+    // update value:
+        boolean updatedAcc = false;
+        boolean equals = false;
+        <getNodeAndOffset()>
+
+        n.wlock();
+        try {
+        <gbAggrColumns: {c|
+            if (f<i0>!=null) {
+                <c.type> oldVal<i0> = n.col<c.relPos>(offset);
+                <c.type> ans<i0> = f<i0>.apply(oldVal<i0>, a<c.relPos>);
+
+                equals &= a<c.relPos><EqOpMap.(c.type)>(oldVal<i0>);
+                boolean updated |= !(ans<i0><EqOpMap.(c.type)>(oldVal<i0>));
+                if (updated) {
+                    a<c.relPos> = ans<i0>;
+                \} else {
+                    a<c.relPos> = oldVal<i0>;
+                \}
+                updatedAcc |= updated;
+            \}
+         }>
+            if (updatedAcc) {
+                n.update(offset<columns:{c|, a<i0>}><nestedColumns:{c|, b<i0>}>);
+                return true;
+            } else {
+                if (equals) {
+                    n.nested(offset).insert(<nestedColumns:{c|b<i0>};separator=",">);
+                }
+                return false;
+            }
+        } finally { n.wunlock(); }
+    }
+<endif> // ] if (gbNestedColumns)
+>>

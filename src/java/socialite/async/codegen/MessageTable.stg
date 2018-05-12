@@ -1,0 +1,62 @@
+import "Utils.stg"
+
+MessageTable(keyType, deltaType, aggrType) ::= <<
+package socialite.async.codegen;
+<importForMsgTable()>
+public class MessageTable extends MessageTableBase {
+    <! keyType should be int\long\key !>
+    private Map\<<WrappedType.(keyType)>, <TypeAtomic.(deltaType)>\> keyDeltaMap;
+    <if(IsInt.(deltaType))>
+    public static final <deltaType> IDENTITY_ELEMENT = <IntegerIdentityElement.(aggrType)>;
+    <elseif(IsLong.(deltaType))>
+    public static final <deltaType> IDENTITY_ELEMENT = <LongIdentityElement.(aggrType)>;
+    <elseif(IsFloat.(deltaType))>
+    public static final <deltaType> IDENTITY_ELEMENT = <FloatIdentityElement.(aggrType)>;
+    <elseif(IsDouble.(deltaType))>
+    public static final <deltaType> IDENTITY_ELEMENT = <DoubleIdentityElement.(aggrType)>;
+    <endif>
+
+    public MessageTable() {
+        keyDeltaMap = new ConcurrentHashMap\<>();
+    }
+
+    public void apply(<keyType> key, <deltaType> delta) {
+        <TypeAtomic.(deltaType)> atomicDelta = keyDeltaMap.putIfAbsent(key, new <TypeAtomic.(deltaType)>(<if(!IsCount.(aggrType))>delta<else>1<endif>));
+        if (atomicDelta != null) {
+            <if(IsSum.(aggrType))>
+            atomicDelta.accumulateAndGet(delta, <WrappedType.(deltaType)>::sum);
+            <elseif(IsMax.(aggrType))>
+            atomicDelta.accumulateAndGet(delta, <WrappedType.(deltaType)>::max);
+            <elseif(IsMin.(aggrType))>
+            atomicDelta.accumulateAndGet(delta, <WrappedType.(deltaType)>::min);
+            <elseif(IsCount.(aggrType))>
+            atomicDelta.addAndGet(delta);
+            <endif>
+        }
+        updateCounter.addAndGet(1);
+    }
+
+    @Override
+    public void resetDelta() {
+        //keyDeltaMap.values().forEach(delta -> delta.set(IDENTITY_ELEMENT));
+        keyDeltaMap.clear();
+        updateCounter.set(0);
+    }
+
+    @Override
+    public Map\<<WrappedType.(keyType)>, <TypeAtomic.(deltaType)>\> get<WrappedType.(keyType)><WrappedType.(deltaType)>Map() {
+        return keyDeltaMap;
+    }
+
+    @Override
+    public int size(){
+        return keyDeltaMap.size();
+    }
+
+    @Override
+    public double accumulate() {
+        return keyDeltaMap.values().stream().map(MyAtomic<WrappedType.(deltaType)>::get)
+        .filter(val-> val != IDENTITY_ELEMENT).reduce(<PrimitiveInitValue.(deltaType)>, <WrappedType.(deltaType)>::sum) + 0.0;
+    }
+}
+>>

@@ -1,0 +1,37 @@
+CHECK_INTERVAL = 100
+CHECK_TYPE = DELTA
+CHECK_COND = E
+CHECK_THRESHOLD = 0
+PRIORITY_TYPE = NONE
+SCHEDULE_PORTION = 0.20
+# ASYNC/SYNC/SEMI-ASYNC
+ENGINE_TYPE = SEMI-ASYNC
+DYNAMIC = TRUE
+MESSAGE_TABLE_UPDATE_THRESHOLD = 1000
+MESSAGE_TABLE_WAITING_INTERVAL = 1000
+INIT_SIZE = 10
+THREAD_NUM = 1
+PRINT_RESULT = TRUE
+RULE:
+cite(int y:0..10, (int x)).
+ancestor(int Y:0..10, (int X, int depth)).
+
+cite(y, x) :- l=$read("/home/gengl/socialite/examples/prog6_cite.txt"), (s1,s2)=$split(l, "	"), y=$toInt(s1), x=$toInt(s2).
+
+ancestor(Y, X, 1) :- cite(Y, X), X < 5.
+ancestor(Z, X, $dmin(D1)) :- ancestor(Z, Y, D), cite(Y, X), D1 = D + 1.
+//RESULT
+//1 0, 1, 2147483647
+//2 0, 1, 2147483647
+//3 1, 1, 2147483647
+//4 1, 1, 2147483647
+//5 2, 1, 2147483647
+//6 4, 1, 2147483647
+//7 4, 1, 2147483647
+//3 0, 2, 2147483647
+//4 0, 2, 2147483647
+//5 0, 2, 2147483647
+//6 1, 2, 2147483647
+//7 1, 2, 2147483647
+//6 0, 3, 2147483647
+//7 0, 3, 2147483647

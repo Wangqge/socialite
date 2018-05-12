@@ -1,0 +1,5 @@
+import "AsyncTableSharedMem.stg"
+import "DistAsyncTable.stg"
+dummy() ::= <<
+  // this is dummy
+>>

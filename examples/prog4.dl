@@ -1,0 +1,30 @@
+CHECK_INTERVAL = 100
+CHECK_TYPE = DELTA
+CHECK_COND = E
+CHECK_THRESHOLD = 0
+SYNC = FALSE
+DYNAMIC = TRUE
+THREAD_NUM = 16
+#PRINT_RESULT = TRUE
+RULE:
+edge(int src:0..808, (int dst)).
+cpaths(int src:0..808, (int dst, int count)).
+edge(s, d) :- l=$read("/home/gengl/Datasets/dag_809.txt"),  (s1,s2)=$split(l, "	"),
+                     s=$toInt(s1), d=$toInt(s2).
+cpaths(x, y, 1) :- edge(x, y).
+cpaths(X, Y, $dcount(C1)) :- cpaths(X, Z, C), edge(Z, Y), C1 = C.
+
+#dist
+#cpaths(int src, (int dst:0..5, int count)).
+#cpaths(X, Y, $dcount(C1)) :- cpaths(Z, X, C), edge(Z, Y), C1 = C.
+//ANSWER:
+//        0 1, 2, 0
+//        0 3, 1, 0
+//        0 4, 5, 0
+//        1 4, 1, 0
+//        2 1, 1, 0
+//        2 4, 2, 0
+//        3 2, 1, 0
+//        3 4, 3, 0
+//        0 2, 1, 0
+//        3 1, 1, 0
